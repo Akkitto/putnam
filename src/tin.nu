@@ -281,7 +281,18 @@ module config {
           $resources | each {
             let resource = ($in | to nuon)
             # REPORT: Workaround for plain `to $format` not simply working.
-            nu -c $"r##########'($resource)'########## | from nuon | to ($format | str downcase)"
+            (
+              nu
+                --no-config-file
+                --no-history
+                --no-std-lib
+                --commands
+              $"
+              r##########'($resource)'##########
+              | from nuon
+              | to ($format | str downcase)
+              "
+            )
           }
           | util to any docs
         )

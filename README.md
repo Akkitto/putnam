@@ -128,6 +128,7 @@ For these rules to make the most sense immediately, make sure, you understand th
 
 ## TODO
 - [x] Add simple minimalist `.gitconfig` reader/writer
+- [ ] Document Environment Variables
 - [ ] Putnam Bootstrap for Continuous Sync: Support Putnam Nu Module commands in other shells through `pm init`
 - [ ] Validate YAML schema through pre-commit lint; for example, all Putnam resource names must be unique within its `kind` and `subkind`
 - [ ] Support source configuration from [Git](https://git-scm.com/) repositories, like e.g. repository with Neovim configuration, incl. plugins
