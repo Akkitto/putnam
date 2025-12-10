@@ -573,6 +573,228 @@ module sync {
     }
   }
 
+  module language {
+    use std/log [ info warning ]
+
+    module rust {
+      # Rust Toolchain Management Module
+
+      # Install rustup if not already installed
+      export def "install-rustup" [] {
+        if (which rustup | is-empty) {
+          info "Installing rustup..."
+          with-env { RUSTUP_INIT_SKIP_PATH_CHECK: "yes" } {
+            curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
+          }
+
+          let cargo_bin = ($env.HOME | path join ".cargo" "bin")
+          let path_list = ($env.PATH | split row (char esep))
+
+          if (not ($path_list | any {|p| $p == $cargo_bin })) {
+            $env.PATH = ([$cargo_bin] ++ $path_list | str join (char esep))
+          }
+
+          info "✓ rustup installed successfully"
+        } else {
+          info "✓ rustup already installed"
+        }
+      }
+
+      # Update stable toolchain to latest release
+      export def "update-stable" [] {
+        info "Updating stable toolchain..."
+        rustup update stable --no-self-update
+        let rustc_version = (^rustc --version | str trim)
+        info $"✓ stable updated to: ($rustc_version)"
+      }
+
+      # Update nightly toolchain to latest
+      export def "update-nightly" [] {
+        info "Updating nightly toolchain..."
+        rustup toolchain install nightly --force --no-self-update
+        let nightly_version = (rustup run nightly rustc --version | str trim)
+        info $"✓ nightly installed: ($nightly_version)"
+      }
+
+      # Update beta toolchain to latest
+      export def "update-beta" [] {
+        info "Updating beta toolchain..."
+        rustup update beta --no-self-update
+        let beta_version = (rustup run beta rustc --version | str trim)
+        info $"✓ beta updated to: ($beta_version)"
+      }
+
+      # Install or update to a specific stable version (e.g., "1.75" or "1.75.0")
+      export def "update-version" [version: string] {
+        info $"Installing/updating Rust stable version: ($version)..."
+        rustup toolchain install $version --no-self-update
+        let version_info = (rustup run $version rustc --version | str trim)
+        info $"✓ Version ($version) installed: ($version_info)"
+      }
+
+      # Install or update to a specific nightly date (format: YYYY-MM-DD, e.g., "2024-11-28")
+      export def "update-nightly-date" [date: string] {
+        let toolchain = $"nightly-($date)"
+        info $"Installing nightly from ($date)..."
+        rustup toolchain install $toolchain --force --no-self-update
+        let nightly_info = (rustup run $toolchain rustc --version | str trim)
+        info $"✓ Nightly ($date) installed: ($nightly_info)"
+      }
+
+      # Set default toolchain globally (stable, nightly, beta, or specific version)
+      export def "set-default" [channel: string] {
+        info $"Setting default toolchain to: ($channel)..."
+        rustup default $channel
+        let rustc_version = (^rustc --version | str trim)
+        info $"✓ Default toolchain set to: ($rustc_version)"
+      }
+
+      # Update all installed toolchains
+      export def "update-all" [] {
+        info "Updating all installed toolchains..."
+        rustup update --no-self-update
+        info "✓ All toolchains updated"
+      }
+
+      # Update all toolchains and force-install missing components
+      export def "update-all-force" [] {
+        info "Updating all toolchains with force-install..."
+        rustup update --no-self-update --force-non-host
+        info "✓ All toolchains updated with force-install"
+      }
+
+      # Display current toolchain versions and info
+      export def "show-versions" [] {
+        info "=== Rust Toolchain Status ==="
+        let rustc_version = (^rustc --version | str trim)
+        let cargo_version = (^cargo --version | str trim)
+        info $"Active rustc: ($rustc_version)"
+        info $"Active cargo: ($cargo_version)"
+
+        info "=== Installed Toolchains ==="
+        rustup show
+      }
+
+      # List all installed toolchains
+      export def "list-toolchains" [] {
+        info "=== Installed Toolchains ==="
+        rustup toolchain list
+      }
+
+      # Remove a specific toolchain
+      export def "remove-toolchain" [channel: string] {
+        info $"Removing toolchain: ($channel)..."
+        rustup toolchain uninstall $channel
+        info $"✓ Toolchain ($channel) removed"
+      }
+
+      # Install development tools (rustfmt, clippy, etc.)
+      export def "install-dev-tools" [] {
+        info "Installing development tools..."
+        rustup component add rustfmt clippy rust-analyzer
+        info "✓ Development tools installed: rustfmt, clippy, rust-analyzer"
+      }
+
+      # Install cross-compilation target (e.g., "x86_64-unknown-linux-musl", "aarch64-unknown-linux-gnu")
+      export def "install-target" [target: string] {
+        info $"Installing target: ($target)..."
+        rustup target add $target
+        info $"✓ Target ($target) installed"
+      }
+
+      # Update everything: rustup, all toolchains, components, and targets
+      export def "full-update" [] {
+        info "=== Starting Full Rust Update ==="
+
+        info "[1/4] Installing rustup if missing..."
+        install-rustup
+
+        info "[2/4] Updating all toolchains..."
+        rustup update --no-self-update
+
+        info "[3/4] Installing development components..."
+        rustup component add rustfmt clippy rust-analyzer
+
+        info "[4/4] Showing final status..."
+        show-versions
+
+        info "✓ Full update completed successfully"
+      }
+
+      # Run a command with a specific toolchain (e.g., `run-with nightly cargo build`)
+      export def "run-with" [toolchain: string, ...args] {
+        info $"Running with ($toolchain): ($args | str join ' ')..."
+        rustup run $toolchain ...$args
+      }
+
+      # Verify installation with basic tests
+      export def "verify-installation" [] {
+        info "=== Verifying Rust Installation ==="
+
+        let rustc_check = (^rustc --version | str trim)
+        let cargo_check = (^cargo --version | str trim)
+        let rustup_check = (rustup --version | str trim)
+
+        info $"rustc: ($rustc_check)"
+        info $"cargo: ($cargo_check)"
+        info $"rustup: ($rustup_check)"
+
+        if (($rustc_check | str contains "rustc") and ($cargo_check | str contains "cargo")) {
+          info "✓ Installation verified successfully"
+        } else {
+          info "✗ Installation verification failed"
+        }
+      }
+
+      # Clean up old toolchain downloads and caches
+      export def "cleanup-cache" [] {
+        info "Cleaning up Rust caches..."
+        # TODO: Implement non-destructive cache cleanup strategy (e.g., using 'cargo clean' / 'cargo-cache'
+        # or explicit removal of ~/.rustup/tmp and ~/.rustup/downloads) based on your disk usage policy.
+        info "✓ Cache cleanup placeholder executed"
+      }
+
+      # Install everything fresh from scratch (destructive - use with caution)
+      export def "fresh-install" [] {
+        info "WARNING: This will uninstall and reinstall rustup from scratch"
+        info "Press Ctrl+C to cancel, or continue..."
+
+        if not (which rustup | is-empty) {
+          rustup self uninstall -y
+        }
+
+        with-env { RUSTUP_INIT_SKIP_PATH_CHECK: "yes" } {
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
+        }
+
+        let cargo_bin = ($env.HOME | path join ".cargo" "bin")
+        let path_list = ($env.PATH | split row (char esep))
+
+        if (not ($path_list | any {|p| $p == $cargo_bin })) {
+          $env.PATH = ([$cargo_bin] ++ $path_list | str join (char esep))
+        }
+
+        rustup toolchain install stable nightly
+        info "✓ Fresh installation completed"
+        show-versions
+      }
+    }
+
+    use util
+    use rust
+
+    # Update Rust toolchain, as declared in Putnam Configuration.
+    export def "rust update" [] {
+      # TODO: Read from Config and update as declared.
+      rust update-stable
+    }
+
+    # Show installed Rust toolchains.
+    export def "rust show" [] {
+      rust show-versions
+    }
+  }
+
   module package {
     # Module extending Rust Cargo functionality.
     module cargo {
@@ -879,6 +1101,7 @@ module sync {
   }
 
   export use config
+  export use language
   export use package
 }
 
