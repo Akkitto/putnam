@@ -211,6 +211,7 @@ module config {
 
   use util
 
+  # Determine first existing path to Putnam Configuration
   export def "get file" [
     --config-file(-c): string|null = null # Path to configuration file.
   ] {
@@ -226,6 +227,7 @@ module config {
     | first
   }
 
+  # Get Putnam Configuration
   export def get [
     --config-file(-c): string|null = null # Path to configuration file.
     --format(-f): string|null = null      # Output format. For example, "yaml" or "toml".
@@ -300,13 +302,127 @@ module config {
     } $in
   }
 
+  # Retrieve specific Putnam Resource through JSON-Path-like query string
   export def "get path" [
-    query: string = ""                    # JSON-Path-ike query string. For example, `spec.profile`.
+    query: string = ""                    # JSON-Path-like query string. For example, `spec.profile`.
     --config-file(-c): string|null = null # Path to configuration file.
   ] {
     get --config-file $config_file
     | util get path $query --config-file $config_file
   }
+
+  # Common workflows
+  module template {
+
+    # Get specified Putnam Resources from Putnam Configuration
+    export def --env "get resources" [
+      kind: string = ""                     # Kind of the Putnam resources to get.
+      subkind: string = ""                  # Subkind of the Putnam resources to get.
+      name: string = ""                     # Name of the Putnam resources to get.
+      --config-file(-c): string|null = null # Path to configuration file.
+      --user(-u): string|null = null # Provide user name, as found in `config.yaml`, to get cargo list for. If not provided, uses result of `whoami`.
+      --as-root = false # If this flag is set, allow this script to be only run as root.
+    ] {
+      # Load Environment
+      util source_env
+
+      # Path to Putnam Configuration
+      let paths_config = [
+        $env.PUTNAM____INPUT__CONFIG_MASTER_PATH?
+      ]
+
+      # Running as Root only works, if actually running as root.
+      if ((is-admin) and (not $as_root)) {
+        error make --unspanned { msg: "You are running as root! If you truly want to run this script as root, then run it with the '--as-root' flag." }
+      } else if ((not (is-admin)) and $as_root) {
+        error make --unspanned { msg: "You set the '--as-root' flag, but this script is not running as root!" }
+      }
+
+      # Declare user running this workflow.
+      let user_name = (
+        if ($user | is-not-empty) {
+          $user
+        } else {
+          whoami | str downcase
+        }
+      )
+
+      # Profiles dclared in Putnam Configuration
+      let profiles = (
+        get --config-file $config_file
+        | where kind == Machine
+        | where subkind == Root
+        | last
+        | std_get spec.profiles
+      )
+
+      # Highest precedence Profile dclared in Putnam Configuration
+      let config = get
+
+      # Matched usernames found through Putnam User resource in Putnam Configuration
+      let putnam_users_associated_with_username = (
+        $config
+        | where kind == User
+        | where subkind == Root
+        | where ($it.profiles | any { |profile|
+            $profile.name in $profiles.name
+          }
+        )
+        | where ($it.profiles | any { |profile|
+            $profile.context in $profiles.context
+          }
+        )
+        | where ($it.spec.sys | any { |usersys|
+            ($usersys | std_get --optional name | default null) == $user_name
+          }
+        )
+      )
+
+      # For the specified user running this workflow,
+      # at least one Putnam User must be declared in Putnam Configuration.
+      # If none are found, abort this process.
+      if ($putnam_users_associated_with_username | is-empty) {
+        return
+      }
+
+      # Putnam `User` resource's `spec.sys` found.
+      # This confirms, that the current user utilising this module,
+      # is actually configured for this machine & context.
+      let putnam_user_sys = (
+        $putnam_users_associated_with_username
+        | std_get spec.sys
+        | each { first }
+        | where name == $user_name
+        | first
+      )
+
+      # Return specified Putname Resources.
+      $config
+      | where kind == $kind
+      | where subkind == $subkind
+      | where { |doc|
+        $profiles | any { |profile|
+          (
+              ($profile | std_get name | str downcase) in ($doc | std_get profiles | std_get name | first | each { str downcase })
+            and
+              ($profile | std_get context | str downcase) in ($doc | std_get profiles | std_get context | first | each { str downcase })
+          )
+        }
+      }
+      | std_get spec
+      | do { |specs|
+        if ($specs | is-empty) {
+          print "Required Putnam resource definition not found. Check documentation of this command, before trying again."
+          exit 29
+        } else {
+          $specs
+        }
+      } $in
+      | std_get $name
+    }
+  }
+
+  export use template
 }
 
 # Load Facts from Putnam Configuration regarding Resource of `kind: Machine` with `subkind: Root`.
@@ -799,86 +915,14 @@ module sync {
       --as-root # If this flag is set, allow this script to be only run as root.
     ] {
 
-      # Load Environment
-      # TODO: Compress common Putnam Configuration search task into reusable utility.
-      util source_env
-
-      let paths_config = [
-        $env.PUTNAM____INPUT__CONFIG_MASTER_PATH?
-      ]
-
-      if ((is-admin) and (not $as_root)) {
-        error make --unspanned { msg: "You are running as root! If you truly want to run this script as root, then run it with the '--as-root' flag." }
-      } else if ((not (is-admin)) and $as_root) {
-        error make --unspanned { msg: "You set the '--as-root' flag, but this script is not running as root!" }
-      }
-
-      let user_name = (
-        if ($user | is-not-empty) {
-          $user
-        } else {
-          whoami | str downcase
-        }
-      )
-
-      let config = config get
-      let profiles = machine get | get spec.profiles
-      let putnam_users_associated_with_username = (
-        $config
-        | where kind == User
-        | where subkind == Root
-        | where ($it.profiles | any { |profile|
-            $profile.name in $profiles.name
-          }
-        )
-        | where ($it.profiles | any { |profile|
-            $profile.context in $profiles.context
-          }
-        )
-        | where ($it.spec.sys | any { |usersys|
-            ($usersys | get --optional name | default null) == $user_name
-          }
-        )
-      )
-
-      if ($putnam_users_associated_with_username | is-empty) {
-        return
-      }
-
-      # Putnam `User` resource's `spec.sys` found.
-      # This confirms, that the current user utilising this module,
-      # is actually configured for this machine & context.
-      let putnam_user_sys = (
-        $putnam_users_associated_with_username
-        | get spec.sys
-        | each { first }
-        | where name == $user_name
-        | first
-      )
-
       let rustups = (
-        $config
-        | where kind == Stack
-        | where subkind == Rust
-        | where { |doc|
-          $profiles | any { |profile|
-            (
-                ($profile | get name | str downcase) in ($doc | get profiles | get name | first | each { str downcase })
-              and
-                ($profile | get context | str downcase) in ($doc | get profiles | get context | first | each { str downcase })
-            )
-          }
-        }
-        | get spec
-        | do { |specs|
-          if ($specs | is-empty) {
-            print "Required Putnam resource definition not found. Check documentation of this command, before trying again."
-            exit 29
-          } else {
-            $specs
-          }
-        } $in
-        | get rustup
+        config template get resources
+            --config-file $config_file
+            --as-root $as_root
+            --user $user
+          Stack
+          Rust
+          rustup
       )
 
       $rustups | each { |rustup|
@@ -1035,86 +1079,14 @@ module sync {
       --fail-fast # If this flag is set, abort the whole operation on the first failed crate.
     ] {
 
-      # Load Environment
-      # TODO: Compress common Putnam Configuration search task into reusable utility.
-      util source_env
-
-      let paths_config = [
-        $env.PUTNAM____INPUT__CONFIG_MASTER_PATH?
-      ]
-
-      if ((is-admin) and (not $as_root)) {
-        error make --unspanned { msg: "You are running as root! If you truly want to run this script as root, then run it with the '--as-root' flag." }
-      } else if ((not (is-admin)) and $as_root) {
-        error make --unspanned { msg: "You set the '--as-root' flag, but this script is not running as root!" }
-      }
-
-      let user_name = (
-        if ($user | is-not-empty) {
-          $user
-        } else {
-          whoami | str downcase
-        }
-      )
-
-      let config = config get
-      let profiles = machine get | get spec.profiles
-      let putnam_users_associated_with_username = (
-        $config
-        | where kind == User
-        | where subkind == Root
-        | where ($it.profiles | any { |profile|
-            $profile.name in $profiles.name
-          }
-        )
-        | where ($it.profiles | any { |profile|
-            $profile.context in $profiles.context
-          }
-        )
-        | where ($it.spec.sys | any { |usersys|
-            ($usersys | get --optional name | default null) == $user_name
-          }
-        )
-      )
-
-      if ($putnam_users_associated_with_username | is-empty) {
-        return
-      }
-
-      # Putnam `User` resource's `spec.sys` found.
-      # This confirms, that the current user utilising this module,
-      # is actually configured for this machine & context.
-      let putnam_user_sys = (
-        $putnam_users_associated_with_username
-        | get spec.sys
-        | each { first }
-        | where name == $user_name
-        | first
-      )
-
       let cargos = (
-        $config
-        | where kind == Stack
-        | where subkind == Rust
-        | where { |doc|
-          $profiles | any { |profile|
-            (
-                ($profile | get name | str downcase) in ($doc | get profiles | get name | first | each { str downcase })
-              and
-                ($profile | get context | str downcase) in ($doc | get profiles | get context | first | each { str downcase })
-            )
-          }
-        }
-        | get spec
-        | do { |specs|
-          if ($specs | is-empty) {
-            print "Required Putnam resource definition not found. Check documentation of this command, before trying again."
-            exit 29
-          } else {
-            $specs
-          }
-        } $in
-        | get cargo
+        config template get resources
+            --config-file $config_file
+            --as-root $as_root
+            --user $user
+          Stack
+          Rust
+          cargo
       )
 
       $cargos | each { |cargo|
