@@ -576,8 +576,9 @@ module sync {
   module language {
     use std/log [ info warning ]
 
+    # Rust Toolchain Management Module
     module rust {
-      # Rust Toolchain Management Module
+      use std/util [ null-device ]
 
       # Install rustup if not already installed
       export def "install-rustup" [] {
@@ -625,11 +626,12 @@ module sync {
       }
 
       # Install or update to a specific stable version (e.g., "1.75" or "1.75.0")
-      export def "update-version" [version: string] {
-        info $"Installing/updating Rust stable version: ($version)..."
-        rustup toolchain install $version --no-self-update
-        let version_info = (rustup run $version rustc --version | str trim)
-        info $"✓ Version ($version) installed: ($version_info)"
+      export def "update-versions" [...versions] {
+        info $"Installing/updating Rust stable version: ($versions)..."
+        rustup toolchain install ...$versions --no-self-update
+        $versions | each { |version|
+          info $"✓ Version ($version): (rustup run $version rustc --version | str trim) installed"
+        }
       }
 
       # Install or update to a specific nightly date (format: YYYY-MM-DD, e.g., "2024-11-28")
@@ -688,6 +690,13 @@ module sync {
         info $"✓ Toolchain ($channel) removed"
       }
 
+      # Install components
+      export def "install-components" [ ...components ] {
+        info "Installing components..."
+        rustup component add ...$components
+        info $"✓ Components installed: ($components))"
+      }
+
       # Install development tools (rustfmt, clippy, etc.)
       export def "install-dev-tools" [] {
         info "Installing development tools..."
@@ -696,10 +705,10 @@ module sync {
       }
 
       # Install cross-compilation target (e.g., "x86_64-unknown-linux-musl", "aarch64-unknown-linux-gnu")
-      export def "install-target" [target: string] {
-        info $"Installing target: ($target)..."
-        rustup target add $target
-        info $"✓ Target ($target) installed"
+      export def "install-targets" [...targets] {
+        info $"Installing target: ($targets)..."
+        rustup target add ...$targets
+        info $"✓ Target ($targets) installed"
       }
 
       # Update everything: rustup, all toolchains, components, and targets
@@ -783,15 +792,103 @@ module sync {
     use util
     use rust
 
-    # Update Rust toolchain, as declared in Putnam Configuration.
-    export def "rust update" [] {
-      # TODO: Read from Config and update as declared.
-      rust update-stable
-    }
+    # Sync Rust Putnam Configuration onto Machine State.
+    export def rust [
+      --config-file(-c): string|null = null # Path to configuration file.
+      --user(-u): string|null = null # Provide user name, as found in `config.yaml`, to get cargo list for. If not provided, uses result of `whoami`.
+      --as-root # If this flag is set, allow this script to be only run as root.
+    ] {
 
-    # Show installed Rust toolchains.
-    export def "rust show" [] {
-      rust show-versions
+      # Load Environment
+      # TODO: Compress common Putnam Configuration search task into reusable utility.
+      util source_env
+
+      let paths_config = [
+        $env.PUTNAM____INPUT__CONFIG_MASTER_PATH?
+      ]
+
+      if ((is-admin) and (not $as_root)) {
+        error make --unspanned { msg: "You are running as root! If you truly want to run this script as root, then run it with the '--as-root' flag." }
+      } else if ((not (is-admin)) and $as_root) {
+        error make --unspanned { msg: "You set the '--as-root' flag, but this script is not running as root!" }
+      }
+
+      let user_name = (
+        if ($user | is-not-empty) {
+          $user
+        } else {
+          whoami | str downcase
+        }
+      )
+
+      let config = config get
+      let profiles = machine get | get spec.profiles
+      let putnam_users_associated_with_username = (
+        $config
+        | where kind == User
+        | where subkind == Root
+        | where ($it.profiles | any { |profile|
+            $profile.name in $profiles.name
+          }
+        )
+        | where ($it.profiles | any { |profile|
+            $profile.context in $profiles.context
+          }
+        )
+        | where ($it.spec.sys | any { |usersys|
+            ($usersys | get --optional name | default null) == $user_name
+          }
+        )
+      )
+
+      if ($putnam_users_associated_with_username | is-empty) {
+        return
+      }
+
+      # Putnam `User` resource's `spec.sys` found.
+      # This confirms, that the current user utilising this module,
+      # is actually configured for this machine & context.
+      let putnam_user_sys = (
+        $putnam_users_associated_with_username
+        | get spec.sys
+        | each { first }
+        | where name == $user_name
+        | first
+      )
+
+      let rustups = (
+        $config
+        | where kind == Stack
+        | where subkind == Rust
+        | where { |doc|
+          $profiles | any { |profile|
+            (
+                ($profile | get name | str downcase) in ($doc | get profiles | get name | first | each { str downcase })
+              and
+                ($profile | get context | str downcase) in ($doc | get profiles | get context | first | each { str downcase })
+            )
+          }
+        }
+        | get spec
+        | do { |specs|
+          if ($specs | is-empty) {
+            print "Required Putnam resource definition not found. Check documentation of this command, before trying again."
+            exit 29
+          } else {
+            $specs
+          }
+        } $in
+        | get rustup
+      )
+
+      $rustups | each { |rustup|
+        let toolchains = $rustup.toolchains
+        let components = $rustup.components
+        let targets = $rustup.targets
+        rust update-versions ...$toolchains
+        rust install-components ...$components
+        rust install-targets ...$targets
+      } | ignore
     }
   }
 
@@ -935,9 +1032,11 @@ module sync {
       --default(-d) # If this flag is set, `--no-default-features` won't be added to `cargo install`'s CLI option list.
       --log-file = false # If this flag is set, will output CSV with installed package and whether the installation went successfully into a folder named after the script, without its extension.
       --as-root # If this flag is set, allow this script to be only run as root.
+      --fail-fast # If this flag is set, abort the whole operation on the first failed crate.
     ] {
 
       # Load Environment
+      # TODO: Compress common Putnam Configuration search task into reusable utility.
       util source_env
 
       let paths_config = [
