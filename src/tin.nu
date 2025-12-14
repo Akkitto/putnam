@@ -799,6 +799,154 @@ module sync {
         rustup toolchain list
       }
 
+      # List installed rustup components.
+      # Usage:
+      #   list-components               # for active/default toolchain
+      #   list-components stable        # for specific toolchain (e.g. "stable")
+      #   list-components nightly-x86_64-unknown-linux-gnu
+      export def "list-components" [
+        toolchain?: string # Optional: Toolchain Name
+      ] {
+        let args = if $toolchain == null {
+          [ "component" "list" "--installed" ]
+        } else {
+          [ "component" "list" "--installed" "--toolchain" $toolchain ]
+        }
+
+        rustup ...$args
+        | lines
+        | where { |line| ($line | str trim | str length) > 0 }
+        | each { |line|
+          $line
+          | str trim
+          | split row (char space)
+          | get 0
+        }
+      }
+
+      # Filter out components that belong to the active rustup profile,
+      # leaving only manually added components.
+      #
+      # Intended usage:
+      #   list-components | filter-components-extra
+      #
+      # Logic:
+      # - Reads the active profile via `rustup show profile`
+      #   (see: https://rust-lang.github.io/rustup/concepts/profiles.html)
+      # - Profiles:
+      #     minimal -> rustc, rust-std, cargo
+      #     default -> minimal + rust-docs, rustfmt, clippy
+      #     complete -> treats all components as profile components
+      # - Matching is done on bare names and target-suffixed forms, e.g.:
+      #     rustc-x86_64-unknown-linux-gnu starts-with "rustc-"
+      def "filter-components-extra" []: list<string> -> list<string> {
+        # Components come from the pipeline (e.g. output of list-components)
+        let components = $in
+
+        # Active profile: "minimal", "default", or "complete"
+        # https://rust-lang.github.io/rustup/concepts/profiles.html
+        let profile = (rustup show profile | str trim)
+
+        # Base/default groups according to rustup docs
+        let base_defaults = [ "rustc" "rust-std" "cargo" ]
+        let extended_defaults = [ "rust-docs" "rustfmt" "clippy" ]
+
+        # Compute the set of default component *names* for the active profile
+        let defaults = (
+          if $profile == "minimal" {
+            $base_defaults
+          } else if $profile == "default" {
+            $base_defaults ++ $extended_defaults
+          } else if $profile == "complete" {
+            # Under the "complete" profile, every component is considered part of the profile.
+            []
+          } else {
+            # Unknown profile -> fall back to minimal-safe assumption.
+            $base_defaults
+          }
+        )
+
+        # For the "complete" profile, there are no "extra" components by definition.
+        if $profile == "complete" {
+          []
+        } else {
+          $components
+          | where { |component|
+              not (
+                $defaults
+                | any { |name|
+                  # Match bare name ("rustfmt") or target-suffixed ("rustfmt-x86_64-unknown-linux-gnu")
+                  ($component == $name)
+                }
+              )
+            }
+        }
+      }
+
+      # Trim target suffixes (e.g. `-x86_64-unknown-linux-gnu`) from component names.
+      #
+      # Intended usage:
+      #   list-components
+      #   | trim-component-suffixes
+      #   | filter-extra-components
+      #
+      # Behaviour:
+      #   cargo-x86_64-unknown-linux-gnu      -> cargo
+      #   rust-std-aarch64-apple-ios          -> rust-std
+      #   llvm-tools-preview-x86_64-unknown-linux-gnu -> llvm-tools-preview
+      #   rust-src                            -> rust-src   (unchanged)
+      #
+      # It detects valid target triples via `rustc --print target-list`,
+      # so only real targets are stripped. See:
+      #   - Targets: https://doc.rust-lang.org/rustc/platform-support.html
+      #   - Target list: `rustc --print target-list`
+      def "trim-component-suffixes" [] {
+        let components = $in
+
+        # Collect all valid targets from rustc so we only strip real triples.
+        # Example output: x86_64-unknown-linux-gnu, aarch64-apple-ios, wasm32-unknown-unknown, ...
+        # https://doc.rust-lang.org/rustc/platform-support.html 
+        let targets = (
+          ^rustc --print target-list
+          | lines
+          | each {|target| $target | str trim }
+          | where {|target| $target | is-not-empty }
+        )
+
+        $components
+        | each {|component|
+            # Find any target that matches as a suffix: "<component>-<target>"
+            let matches = (
+              $targets
+              | where {|target| $component | str ends-with ("-" + $target) }
+            )
+
+            if ($matches | is-empty) {
+              # No matching target suffix -> leave component as-is
+              $component
+            } else {
+              # Take the first matching target triple
+              let target = ($matches | get 0)
+              let suffix = ("-" + $target)
+
+              let total_len = ($component | str length)
+              let suffix_len = ($suffix | str length)
+              let base_len = $total_len - $suffix_len
+
+              # Keep everything before the "-<target>" suffix
+              $component | str substring 0..$base_len | str trim --char "-"
+            }
+          }
+      }
+
+      export def "list-components-extra" [
+        toolchain?: string # Optional: Toolchain Name
+      ] {
+        list-components $toolchain
+        | trim-component-suffixes
+        | filter-components-extra
+      }
+
       # Remove a specific toolchain
       export def "remove-toolchain" [channel: string] {
         info $"Removing toolchain: ($channel)..."
@@ -811,6 +959,14 @@ module sync {
         info "Installing components..."
         rustup component add ...$components
         info $"✓ Components installed: ($components))"
+      }
+
+      # Remove components
+      export def "remove-components" [ ...components ] {
+        if ($components | is-empty) { return }
+        info "Removing components..."
+        rustup component remove ...$components
+        info $"✓ Components removed: ($components))"
       }
 
       # Install development tools (rustfmt, clippy, etc.)
@@ -929,6 +1085,14 @@ module sync {
         let toolchains = $rustup.toolchains
         let components = $rustup.components
         let targets = $rustup.targets
+        let components_undesired = rust list-components-extra | where { |component_installed|
+          not (
+            $components | any { |component_desired|
+              ($component_installed | str trim) == ($component_desired | str trim)
+            }
+          )
+        }
+        rust remove-components ...$components_undesired
         rust update-versions ...$toolchains
         rust install-components ...$components
         rust install-targets ...$targets
@@ -1174,6 +1338,11 @@ module sync {
   export use config
   export use language
   export use package
+}
+
+# When initialising a machine for the first time.
+module init {
+  use std/log [ info warning ]
 }
 
 
