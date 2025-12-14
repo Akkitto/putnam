@@ -637,6 +637,7 @@ module sync {
         run_git init
       }
 
+      # TODO: Make configurable.
       let dotfiles_target_exclude = [
         .backup
         .rustup
@@ -697,7 +698,7 @@ module sync {
       use std/util [ null-device ]
 
       # Install rustup if not already installed
-      export def "install-rustup" [] {
+      export def --env "install-rustup" [] {
         if (which rustup | is-empty) {
           info "Installing rustup..."
           with-env { RUSTUP_INIT_SKIP_PATH_CHECK: "yes" } {
@@ -751,12 +752,13 @@ module sync {
       }
 
       # Install or update to a specific nightly date (format: YYYY-MM-DD, e.g., "2024-11-28")
-      export def "update-nightly-date" [date: string] {
-        let toolchain = $"nightly-($date)"
-        info $"Installing nightly from ($date)..."
+      export def "update-nightly-date" [date: datetime] {
+        let date_suffix = $date | format date "%Y-%m-%d"
+        let toolchain = $"nightly-($date_suffix)"
+        info $"Installing nightly from ($date_suffix)..."
         rustup toolchain install $toolchain --force --no-self-update
         let nightly_info = (rustup run $toolchain rustc --version | str trim)
-        info $"✓ Nightly ($date) installed: ($nightly_info)"
+        info $"✓ Nightly ($date_suffix) installed: ($nightly_info)"
       }
 
       # Set default toolchain globally (stable, nightly, beta, or specific version)
