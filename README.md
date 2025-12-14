@@ -129,6 +129,7 @@ For these rules to make the most sense immediately, make sure, you understand th
 ## TODO
 - [x] Add simple minimalist `.gitconfig` reader/writer
 - [ ] Document Environment Variables
+- [ ] Putnam Bootstrap & Deployment for module file
 - [ ] Putnam Bootstrap for Continuous Sync: Support Putnam Nu Module commands in other shells through `pm init`
 - [ ] Validate YAML schema through pre-commit lint; for example, all Putnam resource names must be unique within its `kind` and `subkind`
 - [ ] Support source configuration from [Git](https://git-scm.com/) repositories, like e.g. repository with Neovim configuration, incl. plugins
@@ -137,6 +138,7 @@ For these rules to make the most sense immediately, make sure, you understand th
 - [ ] Add SSH Key Provisioning
 - [ ] Add thorough `config.yaml.sample`.
 - [ ] Putnam Bootstrap for OS Initialisation: Set up Developer Experience on fresh OS from scratch
+- [ ] Automatic Tests inside Containers
 
 ## Operating System Support
 - [x] [Debian](https://wiki.debian.org/DebianReleases%C2%A0)
