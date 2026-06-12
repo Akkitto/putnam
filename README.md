@@ -149,7 +149,7 @@ For these rules to make the most sense immediately, make sure, you understand th
 - [ ] [Arch Linux](https://archlinux.org/)
 
 ## System Support
-Implementing opeating system level tool configuration.
+Implementing operating system level tool configuration.
 - [ ] [WSL](https://ubuntu.com/desktop/wsl)
 - [ ] [SystemD](https://systemd.io/)
 
@@ -186,7 +186,7 @@ Implement editor configuration & package stacks.
 - [ ] [Cursor](https://cursor.com/)
 
 ## Licence
-Copyright © 2025  [Daniel Braniewski](https://brani.dev/)
+Copyright © 2025-2026  [Daniel Braniewski](https://brani.dev/)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
