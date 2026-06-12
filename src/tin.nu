@@ -1006,7 +1006,7 @@ module sync {
 
       # Run a command with a specific toolchain (e.g., `run-with nightly cargo build`)
       export def "run-with" [toolchain: string, ...args] {
-        info $"Running with ($toolchain): ($args | str join ' ')..."
+        info $"Running with ($toolchain): ($args | str join (char space))..."
         rustup run $toolchain ...$args
       }
 
@@ -1067,6 +1067,7 @@ module sync {
     use rust
 
     # Sync Rust Putnam Configuration onto Machine State.
+    # End-User procedure.
     export def rust [
       --config-file(-c): string|null = null # Path to configuration file.
       --user(-u): string|null = null # Provide user name, as found in `config.yaml`, to get cargo list for. If not provided, uses result of `whoami`.
@@ -1106,11 +1107,130 @@ module sync {
     # Module extending Rust Cargo functionality.
     module cargo {
       use std/util [ null-device ]
+      module version {
+        # Fetch and inspect crates.io package version metadata.
+        #
+        # Import examples after this module block:
+        #   use version
+        #   use version stable
+        #   use version latest
+        #   use version prerelease
+        #   use version list
+        #   use version *
+        #   use version [ stable latest prerelease list versions ]
+        #
+        # Call examples:
+        #   version stable
+        #   version stable ripgrep
+        #   version latest typst-cli --include-yanked
+        #   version prerelease typst-cli
+        #   version list typst-cli --limit 15
+        #   version list typst-cli --limit 15 --features
+        #
+        # crates.io API:
+        #   https://crates.io/api/v1/crates/<crate-name>
 
-      # Install `cargo` package with feature management.
-      # Provide a feature exclusion and/or inclusion list.
-      # Merges your feature inclusion/exclusion list with all available features of this Rust crate by fetching its metadata from `crates.io`.
-      def --wrapped "cargo install" [
+        export const default_crate = "typst-cli"
+
+        const crates_io_headers = [
+          User-Agent "akkitto-crates-version-helper/0.1"
+          Accept "application/json"
+        ]
+
+        def crate_api_url [ crate_name: string ] {
+          $"https://crates.io/api/v1/crates/($crate_name)"
+        }
+
+        def is_prerelease [ version: string ] {
+          $version | str contains "-"
+        }
+
+        def fetch_crate [ crate_name: string ] {
+          http get --headers $crates_io_headers (crate_api_url $crate_name)
+        }
+
+        export def versions [
+          crate_name: string = $default_crate
+          --include-yanked
+        ] {
+          let data = (fetch_crate $crate_name)
+
+          let rows = if $include_yanked {
+            $data.versions
+          } else {
+            $data.versions | where { |row| $row.yanked == false }
+          }
+
+          $rows
+          | sort-by created_at
+          | reverse
+          | each {|row|
+            {
+              crate: $crate_name
+              version: $row.num
+              prerelease: (is_prerelease $row.num)
+              yanked: $row.yanked
+              created_at: $row.created_at
+              rust_version: ($row.rust_version? | default null)
+              features: ($row.features | columns | sort)
+              default_features: ($row.features.default? | default [])
+            }
+          }
+        }
+
+        # Newest stable, non-prerelease version.
+        export def stable [
+          crate_name: string = $default_crate
+          --include-yanked
+        ] {
+          versions $crate_name --include-yanked=$include_yanked
+          | where {|row| $row.prerelease == false }
+          | first
+        }
+
+        # Newest overall version, including prereleases.
+        export def latest [
+          crate_name: string = $default_crate
+          --include-yanked
+        ] {
+          versions $crate_name --include-yanked=$include_yanked
+          | first
+        }
+
+        # Newest prerelease version only.
+        export def prerelease [
+          crate_name: string = $default_crate
+          --include-yanked
+        ] {
+          versions $crate_name --include-yanked=$include_yanked
+          | where {|row| $row.prerelease == true }
+          | first
+        }
+
+        # List available versions, newest first.
+        export def list [
+          crate_name: string = $default_crate
+          --limit: int = 15
+          --include-yanked
+          --features
+        ] {
+          let rows = (
+            versions $crate_name --include-yanked=$include_yanked
+            | first $limit
+          )
+
+          if $features {
+            $rows
+          } else {
+            $rows
+            | select crate version prerelease yanked created_at rust_version
+          }
+        }
+      }
+
+      use version
+
+      export def "generate cmd opts" [
         pkg_name: string = nu # Cargo package name.
         pkg_features_incl: list<string> = [] # Cargo package feature inclusion list.
         p_pkg_features_excl: list<string> = [ native-tls full stable static-link-openssl ] # Cargo package feature exclusion list.
@@ -1133,11 +1253,8 @@ module sync {
         let pkg_features = (
           (
             if ($all) {
-              http get $"https://crates.io/api/v1/crates/($pkg_name)"
-              | get versions
-              | first
+              version stable $pkg_name
               | get features
-              | columns
             } else {
               []
             }
@@ -1162,7 +1279,7 @@ module sync {
             []
           }
         )
-        let cmd = [
+        [
           ...$cmd_opts
           ...$args
           ...(
@@ -1173,18 +1290,50 @@ module sync {
             }
           ) $pkg_name
         ] | compact --empty
+      }
+
+      # Install `cargo` package with feature management.
+      # Provide a feature exclusion and/or inclusion list.
+      # Merges your feature inclusion/exclusion list with all available features of this Rust crate by fetching its metadata from `crates.io`.
+      def --wrapped "cargo install" [
+        pkg_name: string = nu # Cargo package name.
+        pkg_features_incl: list<string> = [] # Cargo package feature inclusion list.
+        p_pkg_features_excl: list<string> = [ native-tls full stable static-link-openssl ] # Cargo package feature exclusion list.
+        p_cmd_opts: list<string> = [ --locked ] # Command line options for `cargo install`.
+        unlocked: bool = false # If this flag is set, the `cargo install` command will not apply the `--locked` CLI option.
+        only_included: bool = false # If this flag is set, only install explicitly included features, without adding any other found package features.
+        all: bool = false # If this flag is set, all available features from crates.io will be retrieved and added to be installed. (Overruled by `only_included`.)
+        default: bool = false # If this flag is set, `--no-default-features` won't be added to `cargo install`'s CLI option list. (Overruled by `only_included`.)
+        quiet: bool = false # If this flag is set, package installations will produce no viewable output.
+        debug: bool = false # Show command to be run, rather than actually running it.
+        ...args # Arbitrary arguments to `cargo install`.
+      ] {
+        let cmd = (
+          generate cmd opts
+            $pkg_name
+            $pkg_features_incl
+            $p_pkg_features_excl
+            $p_cmd_opts
+            $unlocked
+            $only_included
+            $all
+            $default
+            $quiet
+            $debug
+            ...$args # Arbitrary arguments to `cargo install`.
+        )
 
         let entrypoint = [ cargo install ]
         let cmd_full = $entrypoint | append $cmd
 
         if ($debug) {
-          echo ($cmd_full | str join ' ')
+          echo ($cmd_full | str join (char space))
         } else {
           if ($quiet) {
             run-external ...$cmd_full out+err> (null-device)
           } else {
             run-external ...$cmd_full out+err> (if ((sys host | get name | str downcase) != "windows") { "/dev/stderr" } else { (null-device) })
-            echo ($cmd_full | str join ' ')
+            echo ($cmd_full | str join (char space))
           }
         }
       }
@@ -1234,10 +1383,12 @@ module sync {
     use cargo
 
     # Update Cargo Crates.
+    # End-User procedure.
     export def cargo [
       --config-file(-c): string|null = null # Path to configuration file.
       --user(-u): string|null = null # Provide user name, as found in `config.yaml`, to get cargo list for. If not provided, uses result of `whoami`.
       --only-included(-n) # If this flag is set, only install explicitly included features, without adding any other found package features.
+      --include-forced(-k) # If this flag is set, include installation of packages, which have the `--force` flag attached to the `cargo` command.
       --all(-a) # If this flag is set, all available features from crates.io will be retrieved and added to be installed.
       --default(-d) # If this flag is set, `--no-default-features` won't be added to `cargo install`'s CLI option list.
       --log-file = false # If this flag is set, will output CSV with installed package and whether the installation went successfully into a folder named after the script, without its extension.
@@ -1265,6 +1416,13 @@ module sync {
 
         $packages
         | where not ($it.name in $packages_non_uniq.name)
+        | where (
+          if (($cargo | get --optional global.features.include_forced | default false) or $include_forced) {
+            true
+          } else {
+            not ([ "-f" "--force" ] | any { |arg| $arg in ($it | get --optional args | default []) })
+          }
+        )
         | each { |pkg|
           try {
             let cmd = (
@@ -1314,7 +1472,51 @@ module sync {
             {
               name: $pkg.name
               success: false
-              cmd: null
+              cmd: (
+                (
+                  [ cargo install ] | append (
+                    cargo generate cmd opts
+                    $pkg.name
+                    ($pkg | get --optional features.incl | default [])
+                    ($pkg | get --optional features.excl | default [])
+                    [ --locked ]
+                    false
+                    (
+                          (
+                            $pkg
+                            | get --optional features.only_included
+                            | default ($cargo | get --optional global.features.only_included)
+                            | default false
+                          )
+                          or $only_included
+                        )
+                    (
+                          (
+                            $pkg
+                            | get --optional features.all
+                            | default ($cargo | get --optional global.features.all)
+                            | default false
+                          )
+                          or $all
+                        )
+                    (
+                          (
+                            $pkg
+                            | get --optional features.default
+                            | default ($cargo | get --optional global.features.default)
+                            | default false
+                          )
+                          or $default
+                        )
+                    false
+                    ...(
+                        $pkg
+                        | get --optional args
+                        | default []
+                      )
+                  )
+                ) | str join (char space)
+              )
             }
           }
         }
