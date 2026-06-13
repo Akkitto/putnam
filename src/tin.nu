@@ -62,6 +62,22 @@ module util {
       }
     } $in
   }
+
+  export def "success" []: any -> any {
+    let success_style = {
+      fg: '#39ff88'
+      attr: bold
+    }
+    $"(ansi --escape $success_style)✔(ansi reset)"
+  }
+
+  export def "failure" []: any -> any {
+    let failure_style = {
+      fg: '#ff3b5c'
+      attr: bold
+    }
+    $"(ansi --escape $failure_style)✘(ansi reset)"
+  }
 }
 
 # Convert UNIX-like custom data formats to structured data
@@ -1394,6 +1410,7 @@ module sync {
       --log-file = false # If this flag is set, will output CSV with installed package and whether the installation went successfully into a folder named after the script, without its extension.
       --as-root # If this flag is set, allow this script to be only run as root.
       --fail-fast # If this flag is set, abort the whole operation on the first failed crate.
+      --coloured-result = true # If this flag is set, `true` and `false` output will be replaced by ✔ and ✘. Set this to `false`, if you need to process the output programmatically.
     ] {
 
       let cargos = (
@@ -1465,13 +1482,25 @@ module sync {
             )
             {
               name: $pkg.name
-              success: true
+              success: (
+                if ($coloured_result) {
+                  util success
+                } else {
+                  true
+                }
+              )
               cmd: $cmd
             }
           } catch {
             {
               name: $pkg.name
-              success: false
+              success: (
+                if ($coloured_result) {
+                  util failure
+                } else {
+                  false
+                }
+              )
               cmd: (
                 (
                   [ cargo install ] | append (
