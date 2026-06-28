@@ -128,6 +128,7 @@ For these rules to make the most sense immediately, make sure, you understand th
 
 ## TODO
 - [x] Add simple minimalist `.gitconfig` reader/writer
+- [ ] Add Pre-/Post-Install Hook to `cargo install`; Example: `tldr --update`
 - [ ] Document Environment Variables
 - [ ] Putnam Bootstrap & Deployment for module file
 - [ ] Putnam Bootstrap for Continuous Sync: Support Putnam Nu Module commands in other shells through `pm init`
