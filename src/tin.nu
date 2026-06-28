@@ -64,19 +64,27 @@ module util {
   }
 
   export def "success" []: any -> any {
-    let success_style = {
+    let style = {
       fg: '#39ff88'
       attr: bold
     }
-    $"(ansi --escape $success_style)✔(ansi reset)"
+    $"(ansi --escape $style)(char --unicode "2714")(ansi reset)"
   }
 
   export def "failure" []: any -> any {
-    let failure_style = {
+    let style = {
       fg: '#ff3b5c'
       attr: bold
     }
-    $"(ansi --escape $failure_style)✘(ansi reset)"
+    $"(ansi --escape $style)(char --unicode "2718")(ansi reset)"
+  }
+
+  export def "empty" []: any -> any {
+    let style = {
+      fg: '#8aa0b8'
+      attr: dimmed
+    }
+    $"(ansi --escape $style)(char --unicode "2014")(ansi reset)"
   }
 }
 
@@ -1244,7 +1252,61 @@ module sync {
         }
       }
 
+      module executable {
+        # Return one row per installed binary.
+        export def flat [] {
+          ^cargo install --list
+          | lines
+          | where { |line| ($line | str trim | is-not-empty) }
+          | reduce --fold { package: null, rows: [] } { |line, state|
+            let trimmed = ($line | str trim)
+
+            if not ($line | str starts-with " ") {
+              {
+                package: ($trimmed | str replace --regex ' v[0-9].*$' '')
+                rows: $state.rows
+              }
+            } else if $state.package != null {
+              {
+                package: $state.package
+                rows: (
+                  $state.rows
+                  | append {
+                    package: $state.package
+                    binary: $trimmed
+                    in_path: (which $trimmed | is-not-empty)
+                  }
+                )
+              }
+            } else {
+              $state
+            }
+          }
+          | get rows
+          | sort-by package binary
+        }
+
+        # Return grouped package rows with all binaries per package.
+        export def list [] {
+          flat
+          | group-by package
+          | items { |package, binaries|
+            {
+              package: $package
+              binaries: ($binaries | get binary)
+              binaries_in_path: (
+                $binaries
+                | where {|binary| $binary.in_path }
+                | get binary
+              )
+            }
+          }
+          | sort-by package
+        }
+      }
+
       use version
+      use executable
 
       export def "generate cmd opts" [
         pkg_name: string = nu # Cargo package name.
@@ -1392,6 +1454,28 @@ module sync {
             ...$args
         )
       }
+
+      # Show first executable associated with the installed package.
+      # Shows only first, to preserve maximum compatibility in output, e.g. for CSV.
+      # Most end-user packages offer only a single binary, anyway.
+      export def "exe" [
+        name: string = nu # Cargo package name.
+        --coloured-result = true # Whether the output should be more human readable, rather than programmatically processable.
+      ] {
+        try {
+          executable list
+          | where package == $name
+          | get binaries_in_path
+          | first
+          | first
+        } catch {
+          if ($coloured_result) {
+            util empty
+          } else {
+            false
+          }
+        }
+      }
     }
 
     use std/log [ warning ]
@@ -1411,6 +1495,7 @@ module sync {
       --as-root # If this flag is set, allow this script to be only run as root.
       --fail-fast # If this flag is set, abort the whole operation on the first failed crate.
       --coloured-result = true # If this flag is set, `true` and `false` output will be replaced by ✔ and ✘. Set this to `false`, if you need to process the output programmatically.
+      --list-exe # Show first executable associated with the installed package.
     ] {
 
       let cargos = (
@@ -1480,7 +1565,7 @@ module sync {
                   | default []
                 )
             )
-            {
+            let row = {
               name: $pkg.name
               success: (
                 if ($coloured_result) {
@@ -1491,8 +1576,16 @@ module sync {
               )
               cmd: $cmd
             }
+            $row
+            | do {
+              if ($list_exe) {
+                $in | insert exe (cargo exe $pkg.name --coloured-result $coloured_result)
+              } else {
+                $in
+              }
+            } $in
           } catch {
-            {
+            let row = {
               name: $pkg.name
               success: (
                 if ($coloured_result) {
@@ -1547,6 +1640,14 @@ module sync {
                 ) | str join (char space)
               )
             }
+            $row
+            | do {
+              if ($list_exe) {
+                $in | insert exe (cargo exe $pkg.name --coloured-result $coloured_result)
+              } else {
+                $in
+              }
+            } $in
           }
         }
         | do { |status|
